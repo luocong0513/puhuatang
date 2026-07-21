@@ -1,5 +1,18 @@
+/**
+ * 蒲生 AI 聊天 API (改进版)
+ * 
+ * 改进点:
+ * 1. 启动前检查 API Key，无 Key 时返回友好提示
+ * 2. 聊天历史存储到数据库（如已配置）
+ * 3. 更完善的错误处理和 SSE 格式
+ * 4. 请求参数校验
+ */
+
 import { NextRequest } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
+import { getDb, isDbAvailable } from '@/db';
+import { chatHistory } from '@/db/schema';
+import { getUserFromRequest } from '@/lib/auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -255,12 +268,84 @@ const PU_SHENG_SYSTEM_PROMPT = `# 蒲生 v4 身份与规则
 ## 免责
 八字五行分析基于传统命理学，属文化体验，仅供参考。康养建议基于中医五行理论，非医疗诊断，不替代专业医疗。涉及疾病、用药等问题，必须提示用户咨询专业医生。`;
 
+/**
+ * 检查 LLM 是否可用
+ */
+function isLlmAvailable(): boolean {
+  // coze-coding-dev-sdk 会自动读取环境变量中的 API Key
+  // 这里检查关键环境变量是否存在
+  return !!(
+    process.env.OPENAI_API_KEY ||
+    process.env.COZE_WORKLOAD_API_TOKEN ||
+    process.env.COZE_API_TOKEN ||
+    // coze-coding-dev-sdk 在 Coze 平台内运行时无需额外配置
+    process.env.COZE_ENV
+  );
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const { message, history } = await request.json();
+    const body = await request.json();
+    const { message, history, sessionId } = body;
 
+    // 参数校验
     if (!message || typeof message !== 'string') {
-      return Response.json({ error: 'message is required' }, { status: 400 });
+      return Response.json(
+        { error: 'message is required and must be a string' },
+        { status: 400 }
+      );
+    }
+
+    if (message.length > 5000) {
+      return Response.json(
+        { error: '消息过长，请控制在 5000 字以内' },
+        { status: 400 }
+      );
+    }
+
+    // 检查 LLM 是否可用
+    if (!isLlmAvailable()) {
+      // 返回友好提示（非错误状态，前端可正常处理）
+      const encoder = new TextEncoder();
+      const hint = JSON.stringify({
+        content: '您好，我是蒲生。当前 AI 服务尚未配置，请设置 API Key 后再与我聊天。\n\n配置方法：在项目根目录的 `.env.local` 文件中设置 `OPENAI_API_KEY` 或 `COZE_WORKLOAD_API_TOKEN`。',
+        warning: 'llm_not_configured',
+      });
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${hint}\n\n`));
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        },
+      });
+    }
+
+    // 获取用户信息（用于存储聊天历史）
+    const user = await getUserFromRequest(request);
+
+    // 存储用户消息到数据库（如已配置）
+    if (isDbAvailable() && user) {
+      const db = getDb();
+      if (db) {
+        try {
+          const { chatHistory } = await import('@/db/schema');
+          await db.insert(chatHistory).values({
+            userId: user.id,
+            role: 'user',
+            content: message,
+            sessionId: sessionId || null,
+          });
+        } catch (e) {
+          console.error('存储用户消息失败:', e);
+        }
+      }
     }
 
     // 提取请求头用于转发（鉴权+追踪）
@@ -293,12 +378,15 @@ export async function POST(request: NextRequest) {
 
     // 将 LLM 流式输出转换为 SSE 格式返回给前端
     const encoder = new TextEncoder();
+    let fullResponse = '';
+
     const readableStream = new ReadableStream({
       async start(controller) {
         try {
           for await (const chunk of stream) {
             if (chunk.content) {
               const text = chunk.content.toString();
+              fullResponse += text;
               // SSE 格式：data: JSON\n\n
               const sseData = JSON.stringify({ content: text });
               controller.enqueue(encoder.encode(`data: ${sseData}\n\n`));
@@ -306,9 +394,34 @@ export async function POST(request: NextRequest) {
           }
           // 流结束标记
           controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+
+          // 存储 AI 回复到数据库（如已配置）
+          if (isDbAvailable() && user && fullResponse) {
+            const db = getDb();
+            if (db) {
+              try {
+                const { chatHistory } = await import('@/db/schema');
+                await db.insert(chatHistory).values({
+                  userId: user.id,
+                  role: 'assistant',
+                  content: fullResponse,
+                  sessionId: sessionId || null,
+                });
+              } catch (e) {
+                console.error('存储AI回复失败:', e);
+              }
+            }
+          }
         } catch (err) {
           console.error('LLM stream error:', err);
-          const errorData = JSON.stringify({ error: '生成回复时出错' });
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          const errorData = JSON.stringify({
+            error: '生成回复时出错',
+            message: errorMessage,
+            hint: errorMessage.includes('API_KEY') || errorMessage.includes('not configured')
+              ? '请在 .env.local 中配置 OPENAI_API_KEY 或 COZE_WORKLOAD_API_TOKEN'
+              : '请检查后端日志',
+          });
           controller.enqueue(encoder.encode(`data: ${errorData}\n\n`));
         } finally {
           controller.close();
@@ -327,7 +440,7 @@ export async function POST(request: NextRequest) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('Chat API error:', message);
     const hint = message.includes('API_KEY') || message.includes('not configured')
-      ? '请在扣子编程项目环境变量里配置 API Key，参考 https://www.volcengine.com/product/doubao'
+      ? '请在 .env.local 中配置 OPENAI_API_KEY 或 COZE_WORKLOAD_API_TOKEN，参考 https://www.volcengine.com/product/doubao'
       : '请检查后端日志';
     return new Response(
       JSON.stringify({ error: 'chat_failed', message, hint }),
