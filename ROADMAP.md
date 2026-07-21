@@ -3,7 +3,7 @@
 > 五行康养·戏曲疗愈 Web App — 从"能看"到"能用"到"能赚钱"
 
 **最后更新：** 2026-07-21
-**当前阶段：** Phase 0 已完成 → Phase 1 待启动
+**当前阶段：** Phase 0 ✅ → Phase 1 进行中 (代码骨架完成，等待 API Key 和数据库配置)
 
 ---
 
@@ -13,9 +13,9 @@
 |------|------|------|
 | 前端 UI | 5 个页面完整，新中式水墨风格统一 | ★★★★☆ |
 | AI 智能体 | 蒲生系统提示词 257 行，覆盖 10 大场景 | ★★★★★ |
-| 数据层 | 完全缺失，无数据库、无持久化 | ☆☆☆☆☆ |
-| 用户系统 | 无登录、无注册、无用户画像 | ☆☆☆☆☆ |
-| API 层 | /api/chat 存在但缺 Key，/api/chat/token 未配置 | ★★☆☆☆ |
+| 数据层 | Schema 已设计，连接已建，优雅降级就绪 | ★★★☆☆ |
+| 用户系统 | Auth Provider 已建，支持 Supabase + 匿名模式 | ★★★☆☆ |
+| API 层 | health/favorites/reports/chat 全部就绪 | ★★★★☆ |
 | 版本控制 | Git 已初始化 | ★★★★☆ |
 | 部署 | Coze 平台已部署 (9yrrjqptzv.coze.site) | ★★★☆☆ |
 
@@ -34,34 +34,48 @@
 
 ---
 
-## Phase 1：核心后端搭建 🔜 下一步
+## Phase 1：核心后端搭建 🔄 进行中
 
 **目标：让 AI 聊天能跑起来，让数据能存下来**
 
-### 1.1 AI 聊天功能修复
+### 1.0 后端代码骨架 ✅ 已完成
+- [x] 数据库 Schema 设计 (src/db/schema.ts)
+  - `users` — 用户表
+  - `reports` — 五行报告表
+  - `favorites` — 收藏表（戏曲/节气/报告）
+  - `chat_history` — 聊天历史表
+- [x] 数据库连接工具 (src/db/index.ts) + 优雅降级
+- [x] Drizzle Kit 配置 (drizzle.config.ts)
+- [x] SQL 初始化脚本 (drizzle/0000_init.sql)
+- [x] Supabase 客户端工具 (src/lib/supabase.ts)
+- [x] 用户认证 (src/lib/auth.ts) — Supabase JWT + 匿名模式
+- [x] 客户端 Auth Provider (src/components/auth-provider.tsx)
+- [x] API 健康检查 (/api/health)
+- [x] 收藏 CRUD API (/api/favorites)
+- [x] 报告 CRUD API (/api/reports)
+- [x] AI 聊天改造 (API Key 检查 + 聊天历史存储 + 错误处理)
+- [x] 统一 API 响应格式 (src/lib/api-utils.ts)
+- [x] TypeScript 编译零错误
+
+### 1.1 AI 聊天功能激活 ⏳ 等待用户配置
 - [ ] 获取火山引擎/豆包 API Key
 - [ ] 配置 `.env.local` 中的 `OPENAI_API_KEY`
 - [ ] 验证 `/api/chat` 流式输出正常
 - [ ] 测试蒲生智能体的 10 大场景回复
 - [ ] 前端 `chat-modal.tsx` 错误处理优化
 
-### 1.2 Supabase 数据库搭建
+### 1.2 Supabase 数据库激活 ⏳ 等待用户配置
 - [ ] 创建 Supabase 项目
 - [ ] 配置 `.env.local` 中的 Supabase 凭证
-- [ ] 创建 `drizzle.config.ts`
-- [ ] 设计数据库 Schema:
-  - `users` — 用户表
-  - `reports` — 五行报告表
-  - `favorites` — 收藏表（戏曲/节气/报告）
-  - `chat_history` — 聊天历史表
-- [ ] 创建 Drizzle migration
-- [ ] 建立 `src/db/` 目录结构
+- [ ] 在 Supabase SQL Editor 执行 `drizzle/0000_init.sql`
+- [ ] 验证数据库连接
+- [ ] 测试收藏/报告 API
 
-### 1.3 用户认证
-- [ ] 接入 Supabase Auth（手机号/微信登录）
-- [ ] 创建 `src/lib/auth.ts` 认证工具
+### 1.3 用户认证完善 🔜 后续
+- [ ] 接入 Supabase Auth（邮箱/手机号登录）
 - [ ] 首页生辰输入 → 引导注册/登录
 - [ ] 我的页面 → 显示用户信息
+- [ ] 匿名用户 → 注册用户的数据迁移
 
 ---
 
