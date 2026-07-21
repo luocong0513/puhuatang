@@ -9,10 +9,10 @@
  */
 
 import { NextRequest } from 'next/server';
-import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
-import { getDb, isDbAvailable } from '@/db';
-import { chatHistory } from '@/db/schema';
+import { ChatOpenAI } from '@langchain/openai';
+import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages';
 import { getUserFromRequest } from '@/lib/auth';
+import { isSupabaseAvailable, supabaseEnsureUser, supabaseSaveChatMessage } from '@/db/supabase-db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -272,16 +272,14 @@ const PU_SHENG_SYSTEM_PROMPT = `# 蒲生 v4 身份与规则
  * 检查 LLM 是否可用
  */
 function isLlmAvailable(): boolean {
-  // coze-coding-dev-sdk 会自动读取环境变量中的 API Key
-  // 这里检查关键环境变量是否存在
-  return !!(
-    process.env.OPENAI_API_KEY ||
-    process.env.COZE_WORKLOAD_API_TOKEN ||
-    process.env.COZE_API_TOKEN ||
-    // coze-coding-dev-sdk 在 Coze 平台内运行时无需额外配置
-    process.env.COZE_ENV
-  );
+  return !!process.env.OPENAI_API_KEY;
 }
+
+/**
+ * 火山引擎豆包模型 OpenAI 兼容端点
+ */
+const VOLCENGINE_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
+const DOUBAO_MODEL = 'doubao-seed-2-1-turbo-260628';
 
 export async function POST(request: NextRequest) {
   try {
@@ -308,7 +306,7 @@ export async function POST(request: NextRequest) {
       // 返回友好提示（非错误状态，前端可正常处理）
       const encoder = new TextEncoder();
       const hint = JSON.stringify({
-        content: '您好，我是蒲生。当前 AI 服务尚未配置，请设置 API Key 后再与我聊天。\n\n配置方法：在项目根目录的 `.env.local` 文件中设置 `OPENAI_API_KEY` 或 `COZE_WORKLOAD_API_TOKEN`。',
+        content: '您好，我是蒲生。当前 AI 服务尚未配置，请设置 API Key 后再与我聊天。\n\n配置方法：在项目根目录的 `.env.local` 文件中设置 `OPENAI_API_KEY`。',
         warning: 'llm_not_configured',
       });
       const stream = new ReadableStream({
@@ -331,63 +329,57 @@ export async function POST(request: NextRequest) {
     const user = await getUserFromRequest(request);
 
     // 存储用户消息到数据库（如已配置）
-    if (isDbAvailable() && user) {
-      const db = getDb();
-      if (db) {
-        try {
-          const { chatHistory } = await import('@/db/schema');
-          await db.insert(chatHistory).values({
-            userId: user.id,
-            role: 'user',
-            content: message,
-            sessionId: sessionId || null,
-          });
-        } catch (e) {
-          console.error('存储用户消息失败:', e);
-        }
+    if (isSupabaseAvailable() && user) {
+      try {
+        await supabaseEnsureUser(user.id, user.displayName || '访客');
+        await supabaseSaveChatMessage(user.id, 'user', message, sessionId || undefined);
+      } catch (e) {
+        console.error('存储用户消息失败:', e);
       }
     }
 
-    // 提取请求头用于转发（鉴权+追踪）
-    const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);
-    const config = new Config();
-    const client = new LLMClient(config, customHeaders);
-
     // 构建消息列表：system prompt + 历史消息 + 当前消息
-    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-      { role: 'system', content: PU_SHENG_SYSTEM_PROMPT },
+    // 使用 langchain 消息格式
+    const langchainMessages = [
+      new SystemMessage(PU_SHENG_SYSTEM_PROMPT),
     ];
 
     // 添加历史消息（如有）
     if (Array.isArray(history)) {
       for (const msg of history) {
-        if (msg.role === 'user' || msg.role === 'assistant') {
-          messages.push({ role: msg.role, content: msg.content });
+        if (msg.role === 'user') {
+          langchainMessages.push(new HumanMessage(msg.content));
+        } else if (msg.role === 'assistant') {
+          langchainMessages.push(new AIMessage(msg.content));
         }
       }
     }
 
     // 添加当前用户消息
-    messages.push({ role: 'user', content: message });
+    langchainMessages.push(new HumanMessage(message));
 
-    // 使用流式输出
-    const stream = client.stream(messages, {
-      model: 'doubao-seed-1-8-251228',
+    // 创建 ChatOpenAI 实例（直连火山引擎豆包模型）
+    const chatModel = new ChatOpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      model: DOUBAO_MODEL,
       temperature: 0.7,
+      configuration: {
+        baseURL: VOLCENGINE_BASE_URL,
+      },
     });
 
-    // 将 LLM 流式输出转换为 SSE 格式返回给前端
+    // 将 LangChain 流式输出转换为 SSE 格式返回给前端
     const encoder = new TextEncoder();
     let fullResponse = '';
 
     const readableStream = new ReadableStream({
       async start(controller) {
         try {
+          const stream = await chatModel.stream(langchainMessages);
           for await (const chunk of stream) {
-            if (chunk.content) {
-              const text = chunk.content.toString();
+            const text = typeof chunk.content === 'string' ? chunk.content : '';
+            if (text) {
               fullResponse += text;
-              // SSE 格式：data: JSON\n\n
               const sseData = JSON.stringify({ content: text });
               controller.enqueue(encoder.encode(`data: ${sseData}\n\n`));
             }
@@ -396,20 +388,11 @@ export async function POST(request: NextRequest) {
           controller.enqueue(encoder.encode('data: [DONE]\n\n'));
 
           // 存储 AI 回复到数据库（如已配置）
-          if (isDbAvailable() && user && fullResponse) {
-            const db = getDb();
-            if (db) {
-              try {
-                const { chatHistory } = await import('@/db/schema');
-                await db.insert(chatHistory).values({
-                  userId: user.id,
-                  role: 'assistant',
-                  content: fullResponse,
-                  sessionId: sessionId || null,
-                });
-              } catch (e) {
-                console.error('存储AI回复失败:', e);
-              }
+          if (isSupabaseAvailable() && user && fullResponse) {
+            try {
+              await supabaseSaveChatMessage(user.id, 'assistant', fullResponse, sessionId || undefined);
+            } catch (e) {
+              console.error('存储AI回复失败:', e);
             }
           }
         } catch (err) {
@@ -418,8 +401,8 @@ export async function POST(request: NextRequest) {
           const errorData = JSON.stringify({
             error: '生成回复时出错',
             message: errorMessage,
-            hint: errorMessage.includes('API_KEY') || errorMessage.includes('not configured')
-              ? '请在 .env.local 中配置 OPENAI_API_KEY 或 COZE_WORKLOAD_API_TOKEN'
+            hint: errorMessage.includes('API_KEY') || errorMessage.includes('401') || errorMessage.includes('403')
+              ? '请检查 .env.local 中的 OPENAI_API_KEY 是否正确配置'
               : '请检查后端日志',
           });
           controller.enqueue(encoder.encode(`data: ${errorData}\n\n`));
@@ -439,8 +422,8 @@ export async function POST(request: NextRequest) {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('Chat API error:', message);
-    const hint = message.includes('API_KEY') || message.includes('not configured')
-      ? '请在 .env.local 中配置 OPENAI_API_KEY 或 COZE_WORKLOAD_API_TOKEN，参考 https://www.volcengine.com/product/doubao'
+    const hint = message.includes('API_KEY') || message.includes('401') || message.includes('403')
+      ? '请在 .env.local 中配置 OPENAI_API_KEY，参考 https://www.volcengine.com/product/doubao'
       : '请检查后端日志';
     return new Response(
       JSON.stringify({ error: 'chat_failed', message, hint }),

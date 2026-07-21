@@ -1,6 +1,6 @@
-@import "https://fonts.googleapis.cn/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600&display=swap";
+/* @import "https://fonts.googleapis.cn/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600&display=swap"; */
 @import 'tailwindcss';
-@import 'tw-animate-css';
+/* @import 'tw-animate-css'; */
 
 @custom-variant dark (&:is(.dark *));
 

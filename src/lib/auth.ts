@@ -4,6 +4,7 @@
  */
 
 import { NextRequest } from 'next/server';
+import crypto from 'crypto';
 import { getServerSupabase, isSupabaseConfigured } from './supabase';
 
 export interface AuthUser {
@@ -11,6 +12,14 @@ export interface AuthUser {
   email?: string;
   displayName?: string;
   avatarUrl?: string;
+}
+
+/**
+ * 将任意字符串哈希为 UUID v5 兼容格式
+ */
+function stringToUUID(str: string): string {
+  const hash = crypto.createHash('sha256').update(str).digest('hex');
+  return `${hash.slice(0,8)}-${hash.slice(8,12)}-${hash.slice(12,16)}-${hash.slice(16,20)}-${hash.slice(20,32)}`;
 }
 
 /**
@@ -54,17 +63,16 @@ export async function getUserFromRequest(
 }
 
 /**
- * 获取匿名用户 ID（基于 IP + User-Agent 的简单指纹）
- * 匿名模式下用 localStorage 里的 UUID 作为用户标识
+ * 获取匿名用户（基于 X-Anonymous-ID 头，转为 UUID 格式）
  */
 function getAnonymousUser(request: NextRequest): AuthUser {
-  const anonymousId =
+  const rawId =
     request.headers.get('x-anonymous-id') ||
     request.headers.get('x-client-id') ||
     `anon-${request.headers.get('x-forwarded-for') || 'local'}`;
 
   return {
-    id: anonymousId,
+    id: stringToUUID(rawId),
     displayName: '访客',
   };
 }

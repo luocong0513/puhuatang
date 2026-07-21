@@ -2,39 +2,37 @@
  * 五行报告 API
  * GET  /api/reports          - 获取用户报告列表
  * POST /api/reports          - 保存报告
- * GET  /api/reports/:id      - 获取单个报告详情
  *
- * 未配置数据库时返回 503
+ * 使用 Supabase REST API (HTTPS)
  */
 
 import { NextRequest } from 'next/server';
-import { eq, desc } from 'drizzle-orm';
-import { getDb, isDbAvailable } from '@/db';
-import { reports } from '@/db/schema';
 import { getUserFromRequest } from '@/lib/auth';
-import { apiSuccess, apiError, dbNotConfigured } from '@/lib/api-utils';
+import { apiSuccess, apiError } from '@/lib/api-utils';
+import {
+  isSupabaseAvailable,
+  supabaseEnsureUser,
+  supabaseGetReports,
+  supabaseSaveReport,
+} from '@/db/supabase-db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+function dbNotConfigured() {
+  return apiError('数据库未配置，报告功能暂不可用。请在 Supabase 后台执行迁移 SQL。', 503);
+}
+
 // 获取报告列表
 export async function GET(request: NextRequest) {
-  if (!isDbAvailable()) return dbNotConfigured();
-
-  const db = getDb();
-  if (!db) return dbNotConfigured();
+  if (!isSupabaseAvailable()) return dbNotConfigured();
 
   const user = await getUserFromRequest(request);
   if (!user) return apiError('未授权', 401);
 
   try {
-    const result = await db
-      .select()
-      .from(reports)
-      .where(eq(reports.userId, user.id))
-      .orderBy(desc(reports.createdAt))
-      .limit(50);
-
+    await supabaseEnsureUser(user.id, user.displayName || '访客');
+    const result = await supabaseGetReports(user.id);
     return apiSuccess(result);
   } catch (err) {
     console.error('获取报告失败:', err);
@@ -44,10 +42,7 @@ export async function GET(request: NextRequest) {
 
 // 保存报告
 export async function POST(request: NextRequest) {
-  if (!isDbAvailable()) return dbNotConfigured();
-
-  const db = getDb();
-  if (!db) return dbNotConfigured();
+  if (!isSupabaseAvailable()) return dbNotConfigured();
 
   const user = await getUserFromRequest(request);
   if (!user) return apiError('未授权', 401);
@@ -60,18 +55,15 @@ export async function POST(request: NextRequest) {
       return apiError('birthYear, mainElement, reportData 为必填项', 400);
     }
 
-    const [created] = await db
-      .insert(reports)
-      .values({
-        userId: user.id,
-        birthYear,
-        birthMonth: birthMonth || null,
-        birthDay: birthDay || null,
-        birthHour: birthHour || null,
-        mainElement,
-        reportData,
-      })
-      .returning();
+    await supabaseEnsureUser(user.id, user.displayName || '访客');
+    const created = await supabaseSaveReport(user.id, {
+      birthYear,
+      birthMonth,
+      birthDay,
+      birthHour,
+      mainElement,
+      reportData,
+    });
 
     return apiSuccess(created);
   } catch (err) {
