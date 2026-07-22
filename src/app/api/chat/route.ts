@@ -10,7 +10,7 @@
 
 import { NextRequest } from 'next/server';
 import { ChatOpenAI } from '@langchain/openai';
-import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages';
+import { HumanMessage, SystemMessage, AIMessage, BaseMessage } from '@langchain/core/messages';
 import { getUserFromRequest } from '@/lib/auth';
 import { isSupabaseAvailable, supabaseEnsureUser, supabaseSaveChatMessage } from '@/db/supabase-db';
 
@@ -340,7 +340,7 @@ export async function POST(request: NextRequest) {
 
     // 构建消息列表：system prompt + 历史消息 + 当前消息
     // 使用 langchain 消息格式
-    const langchainMessages = [
+    const langchainMessages: BaseMessage[] = [
       new SystemMessage(PU_SHENG_SYSTEM_PROMPT),
     ];
 

@@ -9,8 +9,9 @@ import {
   type OperaPiece, type WuxingCategory,
 } from '@/lib/opera-data';
 import { getCurrentSolarTerm } from '@/lib/solar-terms';
-import { BookmarkIcon, PlayIcon, MusicIcon, ScrollIcon, MaskIcon, WuXingIcon } from '@/components/icons';
+import { BookmarkIcon, PlayIcon, PauseIcon, MusicIcon, ScrollIcon, MaskIcon, WuXingIcon } from '@/components/icons';
 import { useFavorites } from '@/components/favorites-context';
+import { useAudioPlayer, type AudioTrack } from '@/components/audio-player';
 
 // ===== 五行色映射 =====
 const WUXING_ELEMENT_MAP: Record<string, string> = {
@@ -91,6 +92,7 @@ function WuxingMusicCard() {
 function WuxingCategoryTabs({ onPlayClick }: { onPlayClick: (piece: OperaPiece) => void }) {
   const [activeTab, setActiveTab] = useState('wood');
   const { toggleOpera, isOperaFav } = useFavorites();
+  const { currentTrack, isPlaying } = useAudioPlayer();
 
   const filteredPieces = useMemo(
     () => operaPieces.filter(p => p.wuxing === activeTab),
@@ -140,6 +142,8 @@ function WuxingCategoryTabs({ onPlayClick }: { onPlayClick: (piece: OperaPiece) 
             onPlayClick={onPlayClick}
             onToggleFav={() => toggleOpera(piece.id)}
             isFav={isOperaFav(piece.id)}
+            isCurrentTrack={currentTrack?.id === piece.id}
+            isPlaying={currentTrack?.id === piece.id && isPlaying}
           />
         ))}
       </div>
@@ -154,12 +158,16 @@ function OperaPieceCard({
   onPlayClick,
   onToggleFav,
   isFav,
+  isCurrentTrack,
+  isPlaying,
 }: {
   piece: OperaPiece;
   category: WuxingCategory;
   onPlayClick: (piece: OperaPiece) => void;
   onToggleFav: () => void;
   isFav: boolean;
+  isCurrentTrack: boolean;
+  isPlaying: boolean;
 }) {
   return (
     <div className="xuan-card p-4">
@@ -212,32 +220,28 @@ function OperaPieceCard({
 
           {/* 播放按钮 */}
           <div className="mt-2.5">
-            {piece.resourceType === 'placeholder' ? (
-              <div
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs"
-                style={{
-                  background: '#EDE6D6',
-                  color: '#8B7E6A',
-                  fontFamily: 'var(--font-serif)',
-                }}
-              >
-                <MusicIcon size={14} />
-                即将上线
-              </div>
-            ) : (
-              <button
-                onClick={() => onPlayClick(piece)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs transition-all min-h-[36px]"
-                style={{
-                  background: 'var(--primary)',
-                  color: '#FFFFFF',
-                  fontFamily: 'var(--font-serif)',
-                }}
-              >
-                <PlayIcon size={14} />
-                {piece.resourceLabel}
-              </button>
-            )}
+            <button
+              onClick={() => onPlayClick(piece)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs transition-all min-h-[36px]"
+              style={{
+                background: isCurrentTrack && isPlaying ? 'var(--primary)' : isCurrentTrack ? '#F5F0E8' : 'var(--primary)',
+                color: isCurrentTrack && isPlaying ? '#FFFFFF' : isCurrentTrack ? 'var(--primary)' : '#FFFFFF',
+                border: isCurrentTrack && !isPlaying ? '1.5px solid var(--primary)' : '1.5px solid transparent',
+                fontFamily: 'var(--font-serif)',
+              }}
+            >
+              {isCurrentTrack && isPlaying ? (
+                <>
+                  <PauseIcon size={14} />
+                  正在播放
+                </>
+              ) : (
+                <>
+                  <PlayIcon size={14} />
+                  {isCurrentTrack ? '继续播放' : '试听唱段'}
+                </>
+              )}
+            </button>
           </div>
         </div>
       </div>
@@ -536,10 +540,16 @@ function FenchengSection() {
 // ===== 主页面 =====
 export default function OperaPage() {
   const { toggleOpera, isOperaFav } = useFavorites();
+  const audioPlayer = useAudioPlayer();
 
   const handlePlayClick = (piece: OperaPiece) => {
-    // 资源上线后可扩展为真实播放逻辑
-    // 目前暂无可用资源
+    const track: AudioTrack = {
+      id: piece.id,
+      name: piece.name,
+      audioUrl: piece.resourceUrl,
+      coverUrl: piece.coverUrl,
+    };
+    audioPlayer.play(track);
   };
 
   return (
