@@ -1,10 +1,4 @@
 {
-  "framework": "nextjs",
-  "buildCommand": "pnpm next build",
-  "installCommand": "pnpm install --no-frozen-lockfile",
-  "outputDirectory": ".next",
-  "github": {
-    "autoAlias": true,
-    "silent": true
-  }
+  "buildCommand": "pnpm exec next build",
+  "installCommand": "pnpm install --registry=https://registry.npmjs.org --no-frozen-lockfile"
 }
